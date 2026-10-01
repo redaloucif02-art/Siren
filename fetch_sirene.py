@@ -51,12 +51,15 @@ def get(params):
 def gerants(entreprise):
     noms = []
     for d in entreprise.get("dirigeants") or []:
-        if d.get("nom"):
-            nom = f"{d.get('prenoms', '').title()} {d['nom'].title()}".strip()
+        # l'API renvoie parfois des champs à null : on les traite comme vides
+        nom_famille = d.get("nom") or ""
+        if nom_famille:
+            prenoms = d.get("prenoms") or ""
+            nom = f"{prenoms.title()} {nom_famille.title()}".strip()
         else:
-            nom = d.get("denomination", "")
+            nom = d.get("denomination") or ""
         if nom:
-            q = d.get("qualite", "")
+            q = d.get("qualite") or ""
             noms.append(f"{nom} ({q})" if q else nom)
     return " | ".join(noms)
 
@@ -91,7 +94,7 @@ def run(dep):
                 "date_creation": e.get("date_creation", ""),
                 "gerants": gerants(e),
                 "source": "https://annuaire-entreprises.data.gouv.fr/entreprise/"
-                          + e.get("siren", ""),
+                          + (e.get("siren") or ""),
                 "date_collecte": date.today().isoformat(),
             })
         if page >= (data.get("total_pages") or 1):
@@ -128,6 +131,29 @@ def git_push(dep):
     raise RuntimeError(f"push impossible pour {dep}")
 
 
+def resoudre(texte):
+    """all | 75 | 01,02,75 | depuis:40  ->  liste de codes valides."""
+    texte = texte.strip().upper()
+    if texte == "ALL":
+        return list(DEPARTEMENTS)
+    if texte.startswith("DEPUIS:"):
+        debut = norm(texte.split(":", 1)[1])
+        if debut not in DEPARTEMENTS:
+            sys.exit(f"Département de départ invalide : {debut}")
+        return DEPARTEMENTS[DEPARTEMENTS.index(debut):]
+    codes = [norm(c) for c in texte.split(",") if c.strip()]
+    invalides = [c for c in codes if c not in DEPARTEMENTS]
+    if invalides or not codes:
+        sys.exit("Code(s) invalide(s) : " + (", ".join(invalides) or texte) +
+                 "\nValides : 01 à 95 (sans 20), 2A, 2B, 971, 972, 973, 974, 976")
+    return codes
+
+
+def norm(c):
+    c = c.strip().upper()
+    return c.zfill(2) if c.isdigit() and len(c) < 3 else c
+
+
 FORCE = False
 
 
@@ -138,7 +164,7 @@ def main():
     push = "--push" in sys.argv
     if not args:
         sys.exit(__doc__)
-    deps = DEPARTEMENTS if args[0] == "all" else [args[0]]
+    deps = resoudre(args[0])
 
     echecs = []
     for dep in deps:
@@ -155,3 +181,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+            

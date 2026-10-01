@@ -5,6 +5,7 @@ Usage : python gerants_multiples.py                          (agences_uniques.cs
 
 Sortie : une ligne par gérant (même nom normalisé) qui apparaît dans au moins
 2 sociétés, triée par nombre de sociétés décroissant.
+Les [Non-Diffusible] et les commissaires aux comptes sont ignorés.
 Attention : deux homonymes sont fusionnés. Regarde les villes pour juger.
 """
 import csv
@@ -20,12 +21,27 @@ def normaliser(nom):
     return re.sub(r"\s+", " ", nom).strip().lower()
 
 
+def valides(gerants):
+    """Parts valides de la colonne gerants : (texte d'origine, affichage, clé).
+
+    Ignore les valeurs masquées ([Non-Diffusible]) et les commissaires aux
+    comptes (cabinets d'audit), qui ne sont pas de vrais dirigeants.
+    """
+    for part in (gerants or "").split(" | "):
+        m = re.search(r"\(([^)]*)\)\s*$", part)
+        qualite = m.group(1).lower() if m else ""
+        affichage = re.sub(r"\s*\([^)]*\)\s*$", "", part).strip()
+        if not affichage or "non-diffusible" in affichage.lower():
+            continue
+        if "commissaire" in qualite:
+            continue
+        yield part.strip(), affichage, normaliser(affichage)
+
+
 def extraire(gerants):
     """'Jean Dupont (Gérant) | HOLDING X (Président)' -> [(affichage, clé), ...]"""
-    for part in gerants.split(" | "):
-        affichage = re.sub(r"\s*\([^)]*\)\s*$", "", part).strip()
-        if affichage:
-            yield affichage, normaliser(affichage)
+    for _, affichage, cle in valides(gerants):
+        yield affichage, cle
 
 
 def main():
@@ -67,3 +83,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+        

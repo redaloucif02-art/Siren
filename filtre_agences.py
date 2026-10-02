@@ -1,7 +1,7 @@
 import csv, os, random, time, threading, requests
 from concurrent.futures import ThreadPoolExecutor
 
-IN, OUT, DONE = "agences_sans_reseaux.csv", "agences_filtrees.csv", "traites.txt"
+IN, OUT, DONE = "agences_sans_reseau.csv", "agences_filtrees.csv", "traites.txt"
 API = "https://recherche-entreprises.api.gouv.fr/search"
 RATE, WORKERS, MAX_SECONDS = 6, 8, 5.5 * 3600
 LIMIT = int(os.environ.get("LIMIT") or 0)  # 0 = tout ; ex. 3000 pour un test

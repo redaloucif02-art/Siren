@@ -4,22 +4,22 @@ from concurrent.futures import ThreadPoolExecutor
 IN, OUT, DONE, ERR = ("agences_sans_reseau.csv", "agences_filtrees.csv",
                       "traites.txt", "erreurs_429.csv")
 API = "https://recherche-entreprises.api.gouv.fr/search"
-BASE_RATE, WORKERS, MAX_SECONDS = 4, 4, 5.5 * 3600
+BASE_RATE, MIN_RATE, WORKERS, MAX_SECONDS = 3, 1.5, 4, 5.5 * 3600
 MAX_TENTATIVES = 3
 LIMIT = int(os.environ.get("LIMIT") or 0)       # 0 = tout
 MODE = os.environ.get("MODE", "normal")         # "normal" ou "retry"
-EXCLURE_EFFECTIF_INCONNU = False
 
 EFFECTIF = {"00": "0", "01": "1-2", "02": "3-5", "03": "6-9", "11": "10-19",
             "12": "20-49", "21": "50-99", "22": "100-199", "31": "200-249",
             "32": "250-499", "41": "500-999", "42": "1000-1999"}
-FIELDS = ["siren", "nom_complet", "adresse", "code_postal",
-          "effectif", "creation", "dirigeant"]
+FIELDS = ["siren", "nom_complet", "adresse", "code_postal", "effectif",
+          "nb_etablissements", "creation", "dirigeant"]
 
 lock, rate_lock = threading.Lock(), threading.Lock()
 start = time.time()
 stats = {"ok": 0}
-state = {"interval": 1 / BASE_RATE, "pause_until": 0.0, "last": 0.0, "streak": 0}
+state = {"interval": 1 / BASE_RATE, "pause_until": 0.0, "last": 0.0,
+         "streak": 0, "last_cut": 0.0}
 
 def inc(k):
     with lock:
@@ -31,7 +31,6 @@ def suivi():
         print(f"[{int(time.time() - start)}s] rate={1 / state['interval']:.1f}/s "
               f"{dict(sorted(stats.items()))}", flush=True)
 
-# --- cadence adaptative : ralentit seule sur 429, ré-accélère doucement ---
 def throttle():
     with rate_lock:
         now = time.time()
@@ -42,15 +41,19 @@ def throttle():
 
 def on_429(retry_after):
     with lock:
-        state["interval"] = min(state["interval"] * 1.5, 1.0)
-        state["pause_until"] = max(state["pause_until"], time.time() + max(retry_after, 5))
+        now = time.time()
+        if now - state["last_cut"] < 15:   # une rafale de 429 = un seul ralentissement
+            return
+        state["last_cut"] = now
+        state["interval"] = min(state["interval"] * 1.25, 1 / MIN_RATE)
+        state["pause_until"] = max(state["pause_until"], now + min(max(retry_after, 2), 10))
         state["streak"] = 0
 
 def on_ok():
     with lock:
         state["streak"] += 1
-        if state["streak"] >= 50:
-            state["interval"] = max(1 / BASE_RATE, state["interval"] * 0.9)
+        if state["streak"] >= 20:
+            state["interval"] = max(1 / BASE_RATE, state["interval"] * 0.85)
             state["streak"] = 0
 
 def fetch(siren):
@@ -77,19 +80,16 @@ def fetch(siren):
     return ("ERR", code)
 
 def motif(r):
-    s = r["siege"]
     if r["etat_administratif"] != "A":
         return "rejet_cessee"
-    if r.get("nature_juridique") == "1000":
+    if r.get("nature_juridique") == "1000":      # entreprise individuelle
         return "rejet_ei"
     teff = r.get("tranche_effectif_salarie")
-    sans_enseigne = not (s.get("nom_commercial") or s.get("liste_enseignes"))
-    if sans_enseigne and teff in ("NN", "00"):
-        return "rejet_sans_salarie+sans_enseigne"
-    if sans_enseigne and teff is None:
-        return ("rejet_effectif_inconnu+sans_enseigne" if EXCLURE_EFFECTIF_INCONNU
-                else "garde_effectif_inconnu+sans_enseigne")
-    return "garde_agence"
+    if teff is None:
+        return "garde_effectif_inconnu"
+    if teff in ("NN", "00"):
+        return "garde_sans_salarie"
+    return "garde_avec_salarie"
 
 def ligne(r):
     s = r["siege"]
@@ -100,6 +100,7 @@ def ligne(r):
         "adresse": s.get("adresse") or "",
         "code_postal": s.get("code_postal") or "",
         "effectif": EFFECTIF.get(r.get("tranche_effectif_salarie"), "n/c"),
+        "nb_etablissements": r.get("nombre_etablissements_ouverts", ""),
         "creation": r.get("date_creation") or "",
         "dirigeant": (f'{d.get("nom","")} {d.get("prenoms","")}'.strip()
                       or d.get("denomination") or ""),
@@ -110,7 +111,7 @@ def traiter(siren, w, fdone, ferr):
         return
     r = fetch(siren)
     with lock:
-        if isinstance(r, tuple):                 # échec : on met de côté pour retry
+        if isinstance(r, tuple):                 # échec : mis de côté pour retry
             ferr.writerow([siren, r[1]])
             stats["a_reprendre"] = stats.get("a_reprendre", 0) + 1
             return
@@ -152,10 +153,7 @@ def main():
     if not restants:
         return
 
-    # en retry, on repart d'un fichier d'erreurs propre (réécrit à la fin)
-    if MODE == "retry":
-        open(ERR, "w", newline="").write("siren,code\n")
-    elif not os.path.exists(ERR):
+    if MODE == "retry" or not os.path.exists(ERR):
         open(ERR, "w", newline="").write("siren,code\n")
 
     threading.Thread(target=suivi, daemon=True).start()
@@ -172,7 +170,7 @@ def main():
                 if i % 200 == 0:
                     fo.flush(); fdone.flush(); fe.flush()
 
-    if MODE == "retry":                           # on garde en erreur ce qui n'est pas passé
+    if MODE == "retry":
         done_now = lire_set(DONE)
         nouveaux = lire_err()
         reste = {s: err.get(s, "?") for s in err if s not in done_now}

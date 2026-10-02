@@ -4,7 +4,9 @@ Scrape les agences 123webimmo (France) et produit agences_123webimmo.csv.
 
 Étapes :
   1. 123webimmo.com/agences -> liens des agences (/agences/<slug>), pagination suivie si présente
-  2. Chaque page agence -> Nom, Adresse, Téléphone, Email, Raison sociale, Directeur
+  2. Chaque page agence -> bloc "Détails et tarifs de votre Agence" :
+       Nom (Nom commercial), Raison sociale (Mentions légales), Adresse,
+       Téléphone + Email (Contact), Directeur d'agence
 
 Colonnes (mêmes que le scraper Century 21, pour pouvoir fusionner les CSV) :
   Siren, Raison sociale, Nom, Services, Adresse, Téléphone, Email agence,
@@ -22,7 +24,6 @@ Usage :
     LIMIT=5 python scrape_123webimmo.py
 """
 import csv
-import json
 import os
 import re
 import time
@@ -58,15 +59,8 @@ FIELDS = [
     "Source",
 ]
 
-AGENCE_PATH = re.compile(r"^/agences/[^/?#]+/?$")
+AGENCE_PATH = re.compile(r"^/agences/[^/?#]+/?$")  # exclut /agences/baremes/<slug>
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
-PHONE_RE = re.compile(r"(?:(?:\+|00)33[\s.]*|0)[1-9](?:[\s.\-]*\d{2}){4}")
-ROLE_WORDS = r"directeur|directrice|g[ée]rant(?:e)?|dirigeant(?:e)?|responsable d.agence|titulaire"
-ROLE_RE = re.compile(rf"\b(?:{ROLE_WORDS})\b", re.I)
-NAME_STOP = re.compile(
-    r"agence|contact|immobili|nous|notre|votre|[ée]quipe|voir|appel|envoyer|estim|vendre|acheter|louer",
-    re.I,
-)
 
 session = requests.Session()
 session.headers.update(HEADERS)
@@ -155,39 +149,13 @@ def collect_agencies():
     if not agencies:
         raise SystemExit(
             f"Aucune agence trouvée sur {INDEX} (page inaccessible, bloquée par robots.txt, "
-            "ou structure des liens différente)."
+            "ou liens générés en JavaScript)."
         )
     print(f"{len(agencies)} agences uniques trouvées")
     return list(agencies.values())
 
 
 # ------------------------------------------------ Étape 2 : page agence ----
-def jsonld_items(soup):
-    items = []
-    for s in soup.find_all("script", type="application/ld+json"):
-        try:
-            data = json.loads(s.string or s.get_text() or "")
-        except ValueError:
-            continue
-        stack = [data]
-        while stack:
-            d = stack.pop()
-            if isinstance(d, list):
-                stack.extend(d)
-            elif isinstance(d, dict):
-                items.append(d)
-                stack.extend(v for v in d.values() if isinstance(v, (dict, list)))
-    return items
-
-
-def decode_cfemail(h: str) -> str:
-    try:
-        key = int(h[:2], 16)
-        return "".join(chr(int(h[i : i + 2], 16) ^ key) for i in range(2, len(h), 2))
-    except ValueError:
-        return ""
-
-
 def normalize_phone(s: str) -> str:
     digits = re.sub(r"\D", "", s or "")
     if digits.startswith("0033"):
@@ -199,143 +167,79 @@ def normalize_phone(s: str) -> str:
     return clean(s)
 
 
-def find_email(soup, ld):
-    el = soup.find(attrs={"data-cfemail": True})
-    if el:
-        e = decode_cfemail(el["data-cfemail"])
-        if e:
-            return e.lower()
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        if "email-protection#" in href:
-            e = decode_cfemail(href.split("#", 1)[1])
-            if e:
-                return e.lower()
-        if href.lower().startswith("mailto:"):
-            e = href[7:].split("?")[0].strip()
-            if e:
-                return e.lower()
-    for d in ld:
-        if isinstance(d.get("email"), str) and EMAIL_RE.search(d["email"]):
-            return EMAIL_RE.search(d["email"]).group(0).lower()
-    m = EMAIL_RE.search(soup.get_text(" "))
-    return m.group(0).lower() if m else ""
+def flip_name(s: str) -> str:
+    """'SGARRA Maria' -> 'Maria SGARRA' (la page écrit NOM Prénom)."""
+    tokens = clean(s).split(" ")
+    if len(tokens) >= 2 and tokens[0].isupper() and not tokens[-1].isupper():
+        k = 0
+        while k < len(tokens) and tokens[k].isupper():
+            k += 1
+        return " ".join(tokens[k:] + tokens[:k])
+    return clean(s)
 
 
-def find_phone(soup, ld, text):
-    for a in soup.find_all("a", href=True):
-        if a["href"].lower().startswith("tel:"):
-            p = normalize_phone(a["href"][4:])
-            if p:
-                return p
-    for d in ld:
-        if isinstance(d.get("telephone"), str) and d["telephone"].strip():
-            return normalize_phone(d["telephone"])
-    m = PHONE_RE.search(text)
-    return normalize_phone(m.group(0)) if m else ""
+def after_colon(s: str) -> str:
+    return clean(s.split(":", 1)[1]) if ":" in s else ""
 
 
-def find_address(soup, ld):
-    for d in ld:
-        a = d.get("address")
-        if isinstance(a, dict):
-            parts = [a.get("streetAddress"), a.get("postalCode"), a.get("addressLocality")]
-            addr = clean(" ".join(p for p in parts if isinstance(p, str)))
-            if addr:
-                return addr
-        elif isinstance(a, str) and clean(a):
-            return clean(a)
-    tag = soup.find("address")
-    if tag is not None and clean(tag.get_text(" ")):
-        return clean(tag.get_text(" "))
-    # repli : ligne contenant un code postal à 5 chiffres
-    for line in [clean(t) for t in soup.get_text("\n").split("\n")]:
-        if 8 < len(line) < 120 and re.search(r"\b\d{5}\b", line) and not PHONE_RE.search(line):
-            return line
-    return ""
-
-
-def cut_legal(s: str) -> str:
-    s = re.split(r"\s+(?:RCS|SIRET|SIREN|au capital|Adresse du si[èe]ge)\b", s, maxsplit=1, flags=re.I)[0]
-    return clean(s.strip(" :,.-"))
-
-
-def find_raison(lines, flat):
-    for i, l in enumerate(lines):
-        m = re.search(r"Raison sociale\s*:?\s*(.*)", l, re.I)
-        if m:
-            val = m.group(1) or (lines[i + 1] if i + 1 < len(lines) else "")
-            val = cut_legal(val)
-            if val:
-                return val
-    m = re.search(
-        r"(?:exploit[ée]e?|g[ée]r[ée]e?|[ée]dit[ée]e?|propos[ée]e?) par\s+(.+?)(?:\s*[,.(]|\s+au capital|\s+RCS|\s+SIRET|\s+SIREN)",
-        flat,
-        re.I,
-    )
-    return cut_legal(m.group(1)) if m else ""
-
-
-def looks_like_name(s: str) -> bool:
-    s = clean(s)
-    if not s or len(s) > 50 or re.search(r"\d|@", s) or NAME_STOP.search(s) or ROLE_RE.search(s):
-        return False
-    tokens = s.split(" ")
-    if not 2 <= len(tokens) <= 4:
-        return False
-    return all(re.match(r"^[A-ZÀ-ÖØ-Þ][\w'’\-À-ÿ]*\.?$", t) for t in tokens)
-
-
-def find_director(lines):
-    for i, l in enumerate(lines):
-        if len(l) > 120 or not ROLE_RE.search(l):
-            continue
-        m = re.search(rf"(?:{ROLE_WORDS})(?:\s+(?:de l.agence|d.agence))?\s*:\s*(.+)", l, re.I)
-        if m and looks_like_name(m.group(1)):
-            return clean(m.group(1))
-        m = re.match(rf"(.+?)\s*[,\-–|]\s*(?:le |la )?(?:{ROLE_WORDS})", l, re.I)
-        if m and looks_like_name(m.group(1)):
-            return clean(m.group(1))
-        for j in (i - 1, i + 1):
-            if 0 <= j < len(lines) and looks_like_name(lines[j]):
-                return clean(lines[j])
-    return ""
-
-
-def find_name(soup, ld):
-    cand = ""
-    h1 = soup.find("h1")
-    if h1 is not None:
-        cand = clean(h1.get_text(" "))
-    if not cand:
-        for d in ld:
-            if isinstance(d.get("name"), str) and clean(d["name"]):
-                cand = clean(d["name"])
-                break
-    if not cand and soup.title is not None:
-        cand = clean(re.split(r"\s[|\-–]\s", soup.title.get_text())[0])
-    if cand and "123webimmo" not in cand.lower():
-        cand = "123webimmo " + cand
-    return cand
+def info_blocks(section):
+    """{titre h3 (minuscule): bloc div.section__info} dans le bloc 'détails de l'agence'."""
+    blocks = {}
+    for div in section.select("div.section__info"):
+        h3 = div.find("h3")
+        if h3 is not None:
+            blocks[clean(h3.get_text(" ")).lower()] = div
+    return blocks
 
 
 def parse_agence(soup):
-    ld = jsonld_items(soup)
-    name = find_name(soup, ld)
-    email = find_email(soup, ld)
-    for t in soup(["script", "style", "noscript"]):
-        t.decompose()
-    lines = [clean(t) for t in soup.get_text("\n").split("\n")]
-    lines = [l for l in lines if l]
-    flat = " ".join(lines)
-    return {
-        "name": name,
-        "address": find_address(soup, ld),
-        "tel": find_phone(soup, ld, flat),
-        "email": email,
-        "raison": find_raison(lines, flat),
-        "gerant": find_director(lines),
-    }
+    out = {"name": "", "address": "", "tel": "", "email": "", "raison": "", "gerant": ""}
+    section = soup.select_one(".section--agency-details")
+    if section is None:
+        if soup.title is not None:
+            out["name"] = clean(soup.title.get_text())
+        return out
+    blocks = info_blocks(section)
+
+    # Directeur d'agence (repli : responsable d'agence, dont le libellé peut manquer : ": NOM Prénom")
+    resp = blocks.get("responsable d'agence") or blocks.get("responsable d’agence")
+    if resp is not None:
+        lis = [clean(li.get_text(" ")) for li in resp.find_all("li")]
+        directeur = next((after_colon(l) for l in lis if re.match(r"directeu?r|directrice", l, re.I)), "")
+        responsable = next((after_colon(l) for l in lis if not re.match(r"directeu?r|directrice", l, re.I)), "")
+        out["gerant"] = flip_name(directeur or responsable)
+
+    # Adresse
+    for title, div in blocks.items():
+        if title.startswith("adresse"):
+            addr = clean(div.get_text(" ").replace(div.find("h3").get_text(), "", 1))
+            out["address"] = re.sub(r"\b(\d{2})\s(\d{3})\b", r"\1\2", addr)  # "38 560" -> "38560"
+
+    # Contact (les liens tel: du footer sont ceux du siège 123webimmo, donc on les ignore)
+    contact = blocks.get("contact")
+    if contact is not None:
+        for p in contact.find_all("p"):
+            t = clean(p.get_text(" "))
+            if re.match(r"t[ée]l", t, re.I):
+                out["tel"] = normalize_phone(after_colon(t) or t)
+            elif EMAIL_RE.search(t):
+                out["email"] = EMAIL_RE.search(t).group(0).lower()
+
+    # Mentions légales : 1er paragraphe = raison sociale, puis "Nom commercial : ..."
+    legal = blocks.get("mentions légales")
+    if legal is not None:
+        for p in legal.find_all("p"):
+            t = clean(p.get_text(" "))
+            if not t:
+                continue
+            if t.lower().startswith("nom commercial"):
+                out["name"] = after_colon(t)
+            elif not out["raison"] and ":" not in t:
+                out["raison"] = t
+
+    if not out["name"] and soup.title is not None:
+        out["name"] = clean(soup.title.get_text())
+    return out
 
 
 # ----------------------------------------------------------------- Main ----
@@ -389,7 +293,11 @@ def main():
                 "Tel gérant": "",
                 "Email gérant": "",
             }
-            filled = [c for c in ("Nom", "Adresse", "Téléphone", "Email agence", "Raison sociale", "Gérant", "Site web") if row[c]]
+            filled = [
+                c
+                for c in ("Nom", "Adresse", "Téléphone", "Email agence", "Raison sociale", "Gérant", "Site web")
+                if row[c]
+            ]
             row["Source"] = f"{', '.join(filled)} : {url}"
             w.writerow(row)
             out.flush()
@@ -404,7 +312,10 @@ def main():
                 f"tel={d['tel'] or '-'} | email={d['email'] or '-'} | gérant={d['gerant'] or '-'}"
             )
 
-    print(f"\nTerminé : {stats['ok']} agences traitées, {stats['echec']} échecs (relancer pour les reprendre), {stats['vide']} pages vides/interdites.")
+    print(
+        f"\nTerminé : {stats['ok']} agences traitées, {stats['echec']} échecs (relancer pour les reprendre), "
+        f"{stats['vide']} pages vides/interdites."
+    )
     print(
         f"Raison sociale : {stats['raison']} | Tél : {stats['tel']} | Email : {stats['email']} | Gérant : {stats['gerant']}"
     )
@@ -412,3 +323,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+      

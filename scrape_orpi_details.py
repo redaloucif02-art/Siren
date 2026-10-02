@@ -72,12 +72,27 @@ AGENT_RE = re.compile(r"agentId=(\d+)")
 session = requests.Session()
 session.headers.update(HEADERS)
 
-robots = RobotFileParser()
-robots.set_url(f"{BASE}/robots.txt")
-try:
-    robots.read()
-except Exception:
-    robots = None
+def load_robots():
+    """Charge robots.txt avec requests (et notre User-Agent).
+
+    RobotFileParser.read() utilise l'UA de urllib et passe en "tout interdit"
+    sur un 401/403, ce qui ferait ignorer toutes les agences à tort.
+    """
+    try:
+        r = session.get(f"{BASE}/robots.txt", timeout=30)
+    except requests.RequestException as e:
+        print(f"[robots] inaccessible ({e}) -> on continue sans")
+        return None
+    if r.status_code != 200:
+        print(f"[robots] HTTP {r.status_code} -> on continue sans")
+        return None
+    rp = RobotFileParser()
+    rp.parse(r.text.splitlines())
+    print("[robots] robots.txt chargé")
+    return rp
+
+
+robots = load_robots()
 
 
 def allowed(url: str) -> bool:
@@ -265,7 +280,7 @@ def main():
     todo = [a for a in agencies if a.get("Site web") and a["Site web"] not in done]
     print(f"{len(agencies)} agences en entrée, {len(done)} déjà traitées, {len(todo)} à faire")
 
-    stats = {"ok": 0, "echec": 0, "siren": 0, "email": 0, "gerant": 0}
+    stats = {"ok": 0, "echec": 0, "ignore": 0, "siren": 0, "email": 0, "gerant": 0}
 
     with open(OUTPUT, "a", newline="", encoding="utf-8-sig") as out:
         w = csv.DictWriter(out, fieldnames=FIELDS)
@@ -274,8 +289,13 @@ def main():
 
         for i, ag in enumerate(todo, 1):
             url = ag["Site web"]
-            if not url.startswith(BASE) or not allowed(url):
-                print(f"[ignoré] {url}")
+            if not url.startswith(BASE):
+                stats["ignore"] += 1
+                print(f"[ignoré : URL hors {BASE}] {url!r}")
+                continue
+            if not allowed(url):
+                stats["ignore"] += 1
+                print(f"[ignoré : interdit par robots.txt] {url}")
                 continue
 
             html = fetch(url)
@@ -315,8 +335,8 @@ def main():
             )
 
     print(
-        f"\nTerminé : {stats['ok']} agences traitées, {stats['echec']} échecs "
-        f"(relancer le script pour les reprendre)."
+        f"\nTerminé : {stats['ok']} agences traitées, {stats['echec']} échecs, "
+        f"{stats['ignore']} ignorées (relancer le script pour reprendre les échecs)."
     )
     print(
         f"Siren : {stats['siren']} | Email agence : {stats['email']} | "
@@ -326,3 +346,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+      

@@ -19,8 +19,8 @@ import time
 import requests
 
 API = "https://recherche-entreprises.api.gouv.fr/search"
-INPUT = "agences_orpi_details.csv"
-OUTPUT = "agences_orpi_enrichi.csv"
+INPUT = "agences_century21.csv"
+OUTPUT = "agences_century21_enrichi.csv"
 DELAY = 0.25
 HEADERS = {"User-Agent": "TheGreatestDevBot/1.0 (+https://thegreatestdev.com)"}
 

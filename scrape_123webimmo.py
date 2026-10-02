@@ -6,13 +6,14 @@ Scrape les agences 123webimmo (France) et produit agences_123webimmo.csv.
   1. 123webimmo.com/agences -> liens des agences (/agences/<slug>), pagination suivie si présente
   2. Chaque page agence -> bloc "Détails et tarifs de votre Agence" :
        Nom (Nom commercial), Raison sociale (Mentions légales), Adresse,
-       Téléphone + Email (Contact), Directeur d'agence
+       Téléphone + Email (Contact), Directeur d'agence,
+       Services (phrase d'intro de "Notre équipe à vos côtés")
 
 Colonnes (mêmes que le scraper Century 21, pour pouvoir fusionner les CSV) :
   Siren, Raison sociale, Nom, Services, Adresse, Téléphone, Email agence,
   Site web, Gérant, Tel gérant, Email gérant, Source
 
-Laissées vides volontairement : Siren, Services, Tel gérant, Email gérant.
+Laissées vides volontairement : Siren, Tel gérant, Email gérant.
 "Site web" = lien de la page agence sur 123webimmo (sert aussi de clé de reprise).
 "Source"   = colonnes renseignées, puis le lien de la page agence.
 
@@ -192,8 +193,18 @@ def info_blocks(section):
     return blocks
 
 
+def parse_services(soup):
+    """Intro de 'Notre équipe à vos côtés' : '... projet immobilier : acquisition, vente, location, gestion locative...'"""
+    p = soup.select_one("#equipes .section__summary")
+    if p is None:
+        return ""
+    m = re.search(r":\s*(.+)$", clean(p.get_text(" ")))
+    return re.sub(r"[.\s…]+$", "", m.group(1)) if m else ""
+
+
 def parse_agence(soup):
-    out = {"name": "", "address": "", "tel": "", "email": "", "raison": "", "gerant": ""}
+    out = {"name": "", "address": "", "tel": "", "email": "", "raison": "", "gerant": "", "services": ""}
+    out["services"] = parse_services(soup)
     section = soup.select_one(".section--agency-details")
     if section is None:
         if soup.title is not None:
@@ -284,7 +295,7 @@ def main():
                 "Siren": "",
                 "Raison sociale": d["raison"],
                 "Nom": d["name"],
-                "Services": "",
+                "Services": d["services"],
                 "Adresse": d["address"],
                 "Téléphone": d["tel"],
                 "Email agence": d["email"],
@@ -295,7 +306,7 @@ def main():
             }
             filled = [
                 c
-                for c in ("Nom", "Adresse", "Téléphone", "Email agence", "Raison sociale", "Gérant", "Site web")
+                for c in ("Nom", "Services", "Adresse", "Téléphone", "Email agence", "Raison sociale", "Gérant", "Site web")
                 if row[c]
             ]
             row["Source"] = f"{', '.join(filled)} : {url}"

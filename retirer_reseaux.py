@@ -107,7 +107,7 @@ def main():
     print(f"{len(lignes)} sociétés lues")
     print(f"{len(retirees)} retirées : " +
           ", ".join(f"{n} {k}" for k, n in raisons.items()) if retirees else "0 retirée")
-    print(f"{len(gardees)} gardées -> agences_sans_reseau.csv")
+    print(f"{len(gardees)} gardées -> agences_sans_reseaux.csv")
     if not avec_nom:
         print(f"{nom_non_retire} gardées alors que leur nom contient un réseau "
               f"connu (relance avec --avec-nom pour les retirer)")

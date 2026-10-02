@@ -1,7 +1,7 @@
 import csv, os, random, time, threading, requests
 from concurrent.futures import ThreadPoolExecutor
 
-IN, OUT, DONE, ERR = ("agences_sans_reseaux.csv", "agences_filtrees.csv",
+IN, OUT, DONE, ERR = ("agences_sans_reseau.csv", "agences_filtrees.csv",
                       "traites.txt", "erreurs_429.csv")
 API = "https://recherche-entreprises.api.gouv.fr/search"
 BASE_RATE, WORKERS, MAX_SECONDS = 4, 4, 5.5 * 3600

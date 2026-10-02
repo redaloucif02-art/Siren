@@ -1,7 +1,7 @@
 import csv, os, time, threading, requests
 from concurrent.futures import ThreadPoolExecutor
 
-IN, OUT, DONE = "agences_sans_reseau.csv", "agences_filtrees.csv", "traites.txt"
+IN, OUT, DONE = "agences_sans_reseaux.csv", "agences_filtrees.csv", "traites.txt"
 API = "https://recherche-entreprises.api.gouv.fr/search"
 RATE, WORKERS, MAX_SECONDS = 6, 8, 5.5 * 3600
 
@@ -14,6 +14,16 @@ FIELDS = ["siren", "nom_complet", "adresse", "code_postal",
 lock, rate_lock = threading.Lock(), threading.Lock()
 last_call = [0.0]
 start = time.time()
+stats = {"ok": 0, "gardees": 0, "ecartees": 0, "introuvables": 0}
+
+def inc(k):
+    with lock:
+        stats[k] = stats.get(k, 0) + 1
+
+def suivi():
+    while True:
+        time.sleep(30)
+        print(f"[{int(time.time() - start)}s] {stats}", flush=True)
 
 def throttle():
     with rate_lock:
@@ -28,10 +38,13 @@ def fetch(siren):
         try:
             resp = requests.get(API, params={"q": siren, "per_page": 1}, timeout=20)
             if resp.status_code == 200:
+                inc("ok")
                 res = resp.json().get("results") or []
                 return res[0] if res and res[0]["siren"] == siren else None
-            time.sleep(2 ** essai)
+            inc(str(resp.status_code))
+            time.sleep(int(resp.headers.get("Retry-After", 2 ** essai)))
         except requests.RequestException:
+            inc("exc")
             time.sleep(2 ** essai)
     return "ERREUR"
 
@@ -65,10 +78,15 @@ def traiter(siren, w, fdone):
         return
     r = fetch(siren)
     if r == "ERREUR":
-        return
+        return  # non marqué traité : repris au prochain run
     with lock:
-        if r and r["etat_administratif"] == "A" and type_acteur(r) == "agence":
+        if r is None:
+            stats["introuvables"] += 1
+        elif r["etat_administratif"] == "A" and type_acteur(r) == "agence":
             w.writerow(ligne(r))
+            stats["gardees"] += 1
+        else:
+            stats["ecartees"] += 1
         fdone.write(siren + "\n")
 
 def main():
@@ -78,7 +96,14 @@ def main():
     sirens.discard("000000000")
     deja = set(open(DONE).read().split()) if os.path.exists(DONE) else set()
     restants = sorted(sirens - deja)
-    print(f"{len(sirens)} SIREN, {len(deja)} déjà traités, {len(restants)} restants")
+    print(f"{len(sirens)} SIREN, {len(deja)} déjà traités, {len(restants)} restants",
+          flush=True)
+
+    # Test immédiat pour voir tout de suite si l'API répond depuis le runner
+    t = requests.get(API, params={"q": restants[0], "per_page": 1}, timeout=20)
+    print("Test API :", t.status_code, flush=True)
+
+    threading.Thread(target=suivi, daemon=True).start()
 
     nouveau = not os.path.exists(OUT)
     with open(OUT, "a", newline="", encoding="utf-8") as fo, open(DONE, "a") as fdone:
@@ -87,9 +112,8 @@ def main():
             w.writeheader()
         with ThreadPoolExecutor(WORKERS) as ex:
             for i, _ in enumerate(ex.map(lambda s: traiter(s, w, fdone), restants)):
-                if i % 2000 == 0:
+                if i % 500 == 0:
                     fo.flush(); fdone.flush()
-                    print(f"{i}/{len(restants)}", flush=True)
 
 if __name__ == "__main__":
     main()

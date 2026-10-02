@@ -1,11 +1,14 @@
 import csv, os, random, time, threading, requests
 from concurrent.futures import ThreadPoolExecutor
 
-IN, OUT, DONE = "agences_sans_reseau.csv", "agences_filtrees.csv", "traites.txt"
+IN, OUT, DONE, ERR = ("agences_sans_reseaux.csv", "agences_filtrees.csv",
+                      "traites.txt", "erreurs_429.csv")
 API = "https://recherche-entreprises.api.gouv.fr/search"
-RATE, WORKERS, MAX_SECONDS = 6, 8, 5.5 * 3600
-LIMIT = int(os.environ.get("LIMIT") or 0)  # 0 = tout ; ex. 3000 pour un test
-EXCLURE_EFFECTIF_INCONNU = False           # True = écarte aussi effectif inconnu + sans enseigne
+BASE_RATE, WORKERS, MAX_SECONDS = 4, 4, 5.5 * 3600
+MAX_TENTATIVES = 3
+LIMIT = int(os.environ.get("LIMIT") or 0)       # 0 = tout
+MODE = os.environ.get("MODE", "normal")         # "normal" ou "retry"
+EXCLURE_EFFECTIF_INCONNU = False
 
 EFFECTIF = {"00": "0", "01": "1-2", "02": "3-5", "03": "6-9", "11": "10-19",
             "12": "20-49", "21": "50-99", "22": "100-199", "31": "200-249",
@@ -14,9 +17,9 @@ FIELDS = ["siren", "nom_complet", "adresse", "code_postal",
           "effectif", "creation", "dirigeant"]
 
 lock, rate_lock = threading.Lock(), threading.Lock()
-last_call = [0.0]
 start = time.time()
 stats = {"ok": 0}
+state = {"interval": 1 / BASE_RATE, "pause_until": 0.0, "last": 0.0, "streak": 0}
 
 def inc(k):
     with lock:
@@ -25,30 +28,53 @@ def inc(k):
 def suivi():
     while True:
         time.sleep(30)
-        print(f"[{int(time.time() - start)}s] {dict(sorted(stats.items()))}", flush=True)
+        print(f"[{int(time.time() - start)}s] rate={1 / state['interval']:.1f}/s "
+              f"{dict(sorted(stats.items()))}", flush=True)
 
+# --- cadence adaptative : ralentit seule sur 429, ré-accélère doucement ---
 def throttle():
     with rate_lock:
-        wait = last_call[0] + 1 / RATE - time.time()
+        now = time.time()
+        wait = max(state["pause_until"] - now, state["last"] + state["interval"] - now)
         if wait > 0:
             time.sleep(wait)
-        last_call[0] = time.time()
+        state["last"] = time.time()
+
+def on_429(retry_after):
+    with lock:
+        state["interval"] = min(state["interval"] * 1.5, 1.0)
+        state["pause_until"] = max(state["pause_until"], time.time() + max(retry_after, 5))
+        state["streak"] = 0
+
+def on_ok():
+    with lock:
+        state["streak"] += 1
+        if state["streak"] >= 50:
+            state["interval"] = max(1 / BASE_RATE, state["interval"] * 0.9)
+            state["streak"] = 0
 
 def fetch(siren):
-    for essai in range(5):
+    code = "exc"
+    for essai in range(MAX_TENTATIVES):
         throttle()
         try:
             resp = requests.get(API, params={"q": siren, "per_page": 1}, timeout=20)
-            if resp.status_code == 200:
+            code = resp.status_code
+            if code == 200:
                 inc("ok")
+                on_ok()
                 res = resp.json().get("results") or []
                 return res[0] if res and res[0]["siren"] == siren else None
-            inc(f"http_{resp.status_code}")
-            time.sleep(int(resp.headers.get("Retry-After", 2 ** essai)))
+            inc(f"http_{code}")
+            if code == 429:
+                on_429(float(resp.headers.get("Retry-After") or 5))
+            else:
+                time.sleep(2 ** essai)
         except requests.RequestException:
             inc("exc")
+            code = "exc"
             time.sleep(2 ** essai)
-    return "ERREUR"
+    return ("ERR", code)
 
 def motif(r):
     s = r["siege"]
@@ -79,13 +105,15 @@ def ligne(r):
                       or d.get("denomination") or ""),
     }
 
-def traiter(siren, w, fdone):
+def traiter(siren, w, fdone, ferr):
     if time.time() - start > MAX_SECONDS:
         return
     r = fetch(siren)
-    if r == "ERREUR":
-        return  # non marqué traité : repris au prochain run
     with lock:
+        if isinstance(r, tuple):                 # échec : on met de côté pour retry
+            ferr.writerow([siren, r[1]])
+            stats["a_reprendre"] = stats.get("a_reprendre", 0) + 1
+            return
         if r is None:
             stats["introuvable"] = stats.get("introuvable", 0) + 1
         else:
@@ -95,32 +123,64 @@ def traiter(siren, w, fdone):
                 w.writerow(ligne(r))
         fdone.write(siren + "\n")
 
+def lire_set(path):
+    return set(open(path).read().split()) if os.path.exists(path) else set()
+
+def lire_err():
+    if not os.path.exists(ERR):
+        return {}
+    with open(ERR, newline="") as f:
+        return {row["siren"]: row["code"] for row in csv.DictReader(f)}
+
 def main():
-    with open(IN, newline="", encoding="utf-8-sig") as f:
-        sirens = {("".join(c for c in (row.get("siren") or "") if c.isdigit())).zfill(9)
-                  for row in csv.DictReader(f)}
-    sirens.discard("000000000")
-    deja = set(open(DONE).read().split()) if os.path.exists(DONE) else set()
-    restants = sorted(sirens - deja)
+    deja = lire_set(DONE)
+    err = lire_err()
+
+    if MODE == "retry":
+        restants = sorted(set(err) - deja)
+    else:
+        with open(IN, newline="", encoding="utf-8-sig") as f:
+            sirens = {("".join(c for c in (row.get("siren") or "") if c.isdigit())).zfill(9)
+                      for row in csv.DictReader(f)}
+        sirens.discard("000000000")
+        restants = sorted(sirens - deja - set(err))
     if LIMIT:
         random.seed(42)
         restants = random.sample(restants, min(LIMIT, len(restants)))
-    print(f"{len(sirens)} SIREN, {len(deja)} déjà traités, {len(restants)} à traiter",
-          flush=True)
+    print(f"MODE={MODE} | {len(deja)} traités, {len(err)} en erreur, "
+          f"{len(restants)} à traiter", flush=True)
+    if not restants:
+        return
 
-    t = requests.get(API, params={"q": restants[0], "per_page": 1}, timeout=20)
-    print("Test API :", t.status_code, flush=True)
+    # en retry, on repart d'un fichier d'erreurs propre (réécrit à la fin)
+    if MODE == "retry":
+        open(ERR, "w", newline="").write("siren,code\n")
+    elif not os.path.exists(ERR):
+        open(ERR, "w", newline="").write("siren,code\n")
+
     threading.Thread(target=suivi, daemon=True).start()
 
     nouveau = not os.path.exists(OUT)
-    with open(OUT, "a", newline="", encoding="utf-8") as fo, open(DONE, "a") as fdone:
-        w = csv.DictWriter(fo, fieldnames=FIELDS)
+    with open(OUT, "a", newline="", encoding="utf-8") as fo, \
+         open(DONE, "a") as fdone, \
+         open(ERR, "a", newline="") as fe:
+        w, ferr = csv.DictWriter(fo, fieldnames=FIELDS), csv.writer(fe)
         if nouveau:
             w.writeheader()
         with ThreadPoolExecutor(WORKERS) as ex:
-            for i, _ in enumerate(ex.map(lambda s: traiter(s, w, fdone), restants)):
-                if i % 500 == 0:
-                    fo.flush(); fdone.flush()
+            for i, _ in enumerate(ex.map(lambda s: traiter(s, w, fdone, ferr), restants)):
+                if i % 200 == 0:
+                    fo.flush(); fdone.flush(); fe.flush()
+
+    if MODE == "retry":                           # on garde en erreur ce qui n'est pas passé
+        done_now = lire_set(DONE)
+        nouveaux = lire_err()
+        reste = {s: err.get(s, "?") for s in err if s not in done_now}
+        reste.update(nouveaux)
+        with open(ERR, "w", newline="") as f:
+            cw = csv.writer(f)
+            cw.writerow(["siren", "code"])
+            cw.writerows(sorted(reste.items()))
     print("FIN", dict(sorted(stats.items())), flush=True)
 
 if __name__ == "__main__":

@@ -1,5 +1,13 @@
 name: filtre-agences
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "normal ou retry (reprend erreurs_429.csv)"
+        default: "normal"
+      limit:
+        description: "Nb de SIREN (0 = tous)"
+        default: "0"
 permissions:
   contents: write
 jobs:
@@ -13,10 +21,14 @@ jobs:
           python-version: "3.12"
       - run: pip install requests
       - run: python filtre_agences.py
+        env:
+          MODE: ${{ inputs.mode }}
+          LIMIT: ${{ inputs.limit }}
       - if: always()
         run: |
           git config user.name "github-actions"
-          git add agences_filtrees.csv traites.txt
           git config user.email "actions@github.com"
+          git add agences_filtrees.csv traites.txt erreurs_429.csv
           git commit -m "filtre agences" || exit 0
+          git pull --rebase
           git push

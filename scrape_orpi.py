@@ -35,12 +35,27 @@ SITE_LINK_TEXT = "voir le site de l'agence"
 session = requests.Session()
 session.headers.update(HEADERS)
 
-robots = RobotFileParser()
-robots.set_url(f"{BASE}/robots.txt")
-try:
-    robots.read()
-except Exception:
-    robots = None  # si robots.txt est inaccessible, on continue prudemment
+def load_robots():
+    """Lit robots.txt avec notre User-Agent (RobotFileParser.read() utilise celui
+    de urllib, souvent bloqué en 403, ce qui interdit tout par défaut)."""
+    try:
+        r = session.get(f"{BASE}/robots.txt", timeout=30)
+    except requests.RequestException as e:
+        print(f"[robots] inaccessible ({e}), on continue prudemment")
+        return None
+    print(f"[robots] statut HTTP {r.status_code}")
+    if r.status_code != 200:
+        print(f"[robots] pas de robots.txt exploitable, on continue prudemment")
+        return None
+    rp = RobotFileParser()
+    rp.parse(r.text.splitlines())
+    print("[robots] extrait :")
+    for line in r.text.splitlines()[:40]:
+        print("   ", line)
+    return rp
+
+
+robots = load_robots()
 
 
 def allowed(url: str) -> bool:
@@ -171,3 +186,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    

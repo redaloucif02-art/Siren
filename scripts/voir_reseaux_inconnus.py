@@ -16,8 +16,11 @@ dans des départements DIFFÉRENTS (un nom de ville, lui, reste dans un seul dé
 Sortie : data/reseaux_candidats.csv
   type, candidat, nb_agences, nb_departements, exemples_titres, exemples_sites
 et le top 50 affiché.
-Avec --supprimer : les agences (lignes du JSONL) dont au moins un lieu correspond à un candidat sont retirées
-de la source ; la liste est journalisée dans data/reseaux_supprimes.csv (siren, candidat). Sauvegarde .bak en local.
+Avec --supprimer : sont retirées de la source les agences (lignes du JSONL) dont un lieu correspond
+  - à un candidat de type DOMAINE (fiable), ou
+  - à un candidat de type TITRE présent dans data/reseaux_valides.txt (un par ligne, que TU as validé).
+Les candidats par titre non validés ne suppriment JAMAIS rien (mots génériques : paris, saint, centre...).
+Garde-fou : abandon si plus de 10 % de la source serait supprimée (--force pour passer outre) ; la liste est journalisée dans data/reseaux_supprimes.csv (siren, candidat). Sauvegarde .bak en local.
 """
 import csv
 import json
@@ -40,6 +43,8 @@ def arg(name, default):
 
 
 SUPPRIMER = "--supprimer" in sys.argv
+FORCE = "--force" in sys.argv
+MAX_PART = 0.10
 MIN_AG = arg("--min-agences", 4)
 MIN_DEP = arg("--min-dep", 3)
 if "--source" in sys.argv:
@@ -94,8 +99,16 @@ def correspondance(record, dom_c, tit_c):
     return None
 
 
+def charger_valides():
+    f = DATA / "reseaux_valides.txt"
+    if not f.exists():
+        return set()
+    return {norm(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")}
+
+
 def supprimer(dom_c, tit_c):
     """Retire de SRC les agences rattachées aux candidats ; journalise ce qui part."""
+    tit_c = tit_c & charger_valides()  # titres : uniquement ceux validés à la main
     gardees, retirees = [], []
     with open(SRC, encoding="utf-8") as f:
         for line in f:
@@ -113,6 +126,11 @@ def supprimer(dom_c, tit_c):
         w.writerows(retirees)
 
     print(f"\n{len(retirees)} agences à retirer, {len(gardees)} conservées ({SRC.name})")
+    total = len(gardees) + len(retirees)
+    if SUPPRIMER and total and len(retirees) / total > MAX_PART and not FORCE:
+        print(f"ABANDON : {len(retirees)}/{total} = plus de {MAX_PART:.0%} de la source. Rien n'est modifié.")
+        print("Vérifie data/reseaux_supprimes.csv, ou ajoute --force si c'est voulu.")
+        sys.exit(1)
     if not SUPPRIMER:
         print("Simulation : rien n'a été modifié. Relance avec --supprimer pour appliquer.")
         return
@@ -183,4 +201,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-  
+              

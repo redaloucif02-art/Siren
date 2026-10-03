@@ -1,0 +1,41 @@
+name: Retirer les fiches de réseaux
+
+on:
+  workflow_dispatch:
+    inputs:
+      inplace:
+        description: "Remplacer le fichier source (copie *_original.jsonl)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  reseaux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Retrait des réseaux
+        run: |
+          ARGS=""
+          [ "${{ inputs.inplace }}" = "true" ] && ARGS="--inplace"
+          python scripts/detecter_reseaux.py $ARGS | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Enregistrer dans le dépôt
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git diff --cached --quiet && exit 0
+          git commit -m "data: fiches de réseaux retirées"
+          git pull --rebase --autostash
+          git push

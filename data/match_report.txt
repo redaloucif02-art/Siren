@@ -1,0 +1,7 @@
+Agences : 26167
+  confiance haute   :  10914  (41.7 %)
+  confiance moyenne :   8453  (32.3 %)
+  confiance faible  :   2321  (8.9 %)
+  confiance aucune  :   4479  (17.1 %)
+
+Fichiers écrits : data/agences_enrichies.csv, data/a_revoir.csv

@@ -1,0 +1,43 @@
+name: Scrape agences (Serper Places)
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_rows:
+        description: "Nombre max d'agences pour ce run (vide = tout)"
+        default: ""
+      retry_errors:
+        description: "Rejouer uniquement data/errors.jsonl"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "0 */6 * * *"   # relance auto : reprend là où ça s'est arrêté, sort tout de suite si fini
+
+permissions:
+  contents: write
+
+concurrency:
+  group: scrape-places
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests
+
+      - name: Scrape
+        env:
+          SERPER_API_KEYS: ${{ secrets.SERPER_API_KEYS }}
+          MAX_ROWS: ${{ inputs.max_rows }}
+          RETRY_ERRORS: ${{ inputs.retry_errors }}
+        run: python scripts/scrape_places.py

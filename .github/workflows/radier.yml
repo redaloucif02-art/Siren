@@ -1,0 +1,46 @@
+name: Radier les agences sans résultat
+
+on:
+  workflow_dispatch:
+    inputs:
+      hors_immo:
+        description: "Radier aussi les agences dont aucune fiche n'est immobilière"
+        type: boolean
+        default: false
+      inplace:
+        description: "Remplacer data/agences.csv (sauvegarde dans agences_original.csv)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  radier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Radiation
+        run: |
+          ARGS=""
+          [ "${{ inputs.hors_immo }}" = "true" ] && ARGS="$ARGS --hors-immo"
+          [ "${{ inputs.inplace }}" = "true" ] && ARGS="$ARGS --inplace"
+          python scripts/radier_sans_resultat.py $ARGS | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Enregistrer dans le dépôt
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git diff --cached --quiet && exit 0
+          git commit -m "data: agences radiées (sans résultat)"
+          git pull --rebase --autostash
+          git push

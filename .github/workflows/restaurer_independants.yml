@@ -1,0 +1,41 @@
+name: Restaurer places_independants.jsonl
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "SHA du commit AVANT la suppression (laisser vide = détection automatique)"
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  restaurer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Restaurer le fichier
+        run: |
+          F=data/places_independants.jsonl
+          if [ -n "${{ inputs.sha }}" ]; then
+            AVANT="${{ inputs.sha }}"
+          else
+            SUPPR=$(git log --format=%H --grep="suppression" -1 -- "$F")
+            [ -z "$SUPPR" ] && { echo "Aucun commit de suppression trouvé"; exit 1; }
+            AVANT="${SUPPR}^"
+          fi
+          echo "Restauration depuis $AVANT"
+          git checkout "$AVANT" -- "$F"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$F"
+          git diff --cached --quiet && { echo "Rien à restaurer"; exit 0; }
+          git commit -m "data: restaure places_independants.jsonl"
+          git pull --rebase --autostash
+          git push

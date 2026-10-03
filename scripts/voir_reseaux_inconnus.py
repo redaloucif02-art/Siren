@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Repère les réseaux/franchises probables qui NE SONT PAS dans data/reseaux.txt. Ne supprime rien.
+"""Repère les réseaux/franchises probables qui NE SONT PAS dans data/reseaux.txt et, avec --supprimer,
+retire de la source les agences concernées (sans --supprimer : simple simulation, rien n'est modifié).
 
 Usage :
   python scripts/voir_reseaux_inconnus.py                      # source : data/places_independants.jsonl (sinon places_site.jsonl)
   python scripts/voir_reseaux_inconnus.py --source data/places_site.jsonl
   python scripts/voir_reseaux_inconnus.py --min-agences 4 --min-dep 3
+  python scripts/voir_reseaux_inconnus.py --supprimer          # supprime réellement (sinon : simulation)
 
 Principe : un réseau laisse deux traces répétées chez des agences DIFFÉRENTES (SIREN distincts) et
 dans des départements DIFFÉRENTS (un nom de ville, lui, reste dans un seul département) :
@@ -13,10 +15,13 @@ dans des départements DIFFÉRENTS (un nom de ville, lui, reste dans un seul dé
 
 Sortie : data/reseaux_candidats.csv
   type, candidat, nb_agences, nb_departements, exemples_titres, exemples_sites
-et le top 50 affiché. À toi de décider quoi ajouter à data/reseaux.txt.
+et le top 50 affiché.
+Avec --supprimer : les agences (lignes du JSONL) dont au moins un lieu correspond à un candidat sont retirées
+de la source ; la liste est journalisée dans data/reseaux_supprimes.csv (siren, candidat). Sauvegarde .bak en local.
 """
 import csv
 import json
+import os
 import re
 import sys
 from collections import defaultdict
@@ -34,6 +39,7 @@ def arg(name, default):
     return type(default)(sys.argv[sys.argv.index(name) + 1]) if name in sys.argv else default
 
 
+SUPPRIMER = "--supprimer" in sys.argv
 MIN_AG = arg("--min-agences", 4)
 MIN_DEP = arg("--min-dep", 3)
 if "--source" in sys.argv:
@@ -74,6 +80,51 @@ def ngrams(title):
     return out
 
 
+def correspondance(record, dom_c, tit_c):
+    """Retourne le premier candidat (réseau) retrouvé dans les lieux de cette agence, sinon None."""
+    for p in record.get("places") or []:
+        site = p.get("website", "")
+        if site:
+            d = registered_domain(site)
+            if d in dom_c:
+                return f"domaine:{d}"
+        for ng in ngrams(p.get("title", "")):
+            if ng in tit_c:
+                return f"titre:{ng}"
+    return None
+
+
+def supprimer(dom_c, tit_c):
+    """Retire de SRC les agences rattachées aux candidats ; journalise ce qui part."""
+    gardees, retirees = [], []
+    with open(SRC, encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            hit = correspondance(json.loads(line), dom_c, tit_c) if (dom_c or tit_c) else None
+            if hit:
+                retirees.append((json.loads(line).get("siren"), hit))
+            else:
+                gardees.append(line if line.endswith("\n") else line + "\n")
+
+    with open(DATA / "reseaux_supprimes.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["siren", "candidat"])
+        w.writerows(retirees)
+
+    print(f"\n{len(retirees)} agences à retirer, {len(gardees)} conservées ({SRC.name})")
+    if not SUPPRIMER:
+        print("Simulation : rien n'a été modifié. Relance avec --supprimer pour appliquer.")
+        return
+    if retirees:
+        if not os.environ.get("GITHUB_ACTIONS"):  # en CI, l'historique git sert de sauvegarde
+            SRC.with_suffix(SRC.suffix + ".bak").write_bytes(SRC.read_bytes())
+        tmp = SRC.with_suffix(SRC.suffix + ".tmp")
+        tmp.write_text("".join(gardees), encoding="utf-8")
+        os.replace(tmp, SRC)
+    print(f"Supprimé. Journal : data/reseaux_supprimes.csv")
+
+
 def main():
     known = load_names()
     print(f"Source : {SRC.name} | seuils : {MIN_AG} agences distinctes, {MIN_DEP} départements")
@@ -102,6 +153,7 @@ def main():
                     if site and len(g["sites"]) < 2: g["sites"].append(site)
 
     rows = []
+    dom_c, tit_c = set(), set()
     for kind, groups in (("domaine", dom), ("titre", tit)):
         for cand, g in groups.items():
             if len(g["sirens"]) < MIN_AG or len(g["deps"]) < MIN_DEP:
@@ -110,6 +162,7 @@ def main():
             probe_site = cand if kind == "domaine" else ""
             if find_network(probe_title, probe_site, known)[0]:
                 continue  # déjà dans ta liste
+            (dom_c if kind == "domaine" else tit_c).add(cand)
             rows.append([kind, cand, len(g["sirens"]), len(g["deps"]),
                          " | ".join(g["titles"]), " | ".join(g["sites"])])
 
@@ -125,6 +178,9 @@ def main():
     for kind, cand, na, nd, titles, _ in rows[:50]:
         print(f"{kind:8s} {na:7d} {nd:5d}  {cand}   ex. {titles.split(' | ')[0]}")
 
+    supprimer(dom_c, tit_c)
+
 
 if __name__ == "__main__":
     main()
+  

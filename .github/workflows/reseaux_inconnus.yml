@@ -1,4 +1,4 @@
-name: Voir les réseaux absents de ma liste
+name: Voir / supprimer les réseaux absents de ma liste
 
 on:
   workflow_dispatch:
@@ -9,6 +9,10 @@ on:
       min_dep:
         description: "Nombre minimum de départements différents"
         default: "3"
+      supprimer:
+        description: "Supprimer réellement les agences de ces réseaux (sinon simulation)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -28,14 +32,15 @@ jobs:
 
       - name: Analyse
         run: |
-          python scripts/voir_reseaux_inconnus.py --min-agences "${{ inputs.min_agences || 4 }}" --min-dep "${{ inputs.min_dep || 3 }}" | tee -a "$GITHUB_STEP_SUMMARY"
+          python scripts/voir_reseaux_inconnus.py --min-agences "${{ inputs.min_agences || 4 }}" --min-dep "${{ inputs.min_dep || 3 }}" ${{ inputs.supprimer && '--supprimer' || '' }} | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Enregistrer le CSV dans le dépôt
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/reseaux_candidats.csv
+          git add data/reseaux_candidats.csv data/reseaux_supprimes.csv data/*.jsonl
           git diff --cached --quiet && exit 0
-          git commit -m "data: réseaux candidats"
+          git commit -m "data: réseaux candidats / suppression"
           git pull --rebase --autostash
           git push
+          

@@ -1,0 +1,48 @@
+name: Scrape agences L'Adresse
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Nombre max d'agences à traiter (0 = toutes, utile pour tester avec 5)"
+        required: false
+        default: "0"
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installer les dépendances Python
+        run: pip install requests beautifulsoup4
+
+      - name: Lancer le scrape L'Adresse
+        env:
+          LIMIT: ${{ github.event.inputs.limit }}
+        run: python scrape_ladresse.py
+
+      # always() : on sauvegarde la progression même si le job plante ou time out
+      - name: Commit du CSV sur main
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add agences_ladresse.csv
+          if git diff --cached --quiet; then
+            echo "Aucun changement"
+          else
+            git commit -m "Mise à jour agences_ladresse.csv"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi

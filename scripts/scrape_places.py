@@ -30,11 +30,11 @@ ERR_PATH = ROOT / "data/errors.jsonl"
 PROGRESS_PATH = ROOT / "data/progress.json"
 
 API_URL = os.getenv("SERPER_URL", "https://google.serper.dev/places")
-CREDITS_PER_KEY = int(os.getenv("CREDITS_PER_KEY", "2500"))
-WORKERS = int(os.getenv("WORKERS", "8"))
-COMMIT_EVERY = int(os.getenv("COMMIT_EVERY", "500"))
-MAX_ROWS = int(os.getenv("MAX_ROWS", "0")) or None  # max agences pour CE run
-MAX_SECONDS = int(os.getenv("MAX_SECONDS", str(5 * 3600 + 30 * 60)))  # arrêt propre avant les 6 h GitHub
+CREDITS_PER_KEY = int(os.getenv("CREDITS_PER_KEY") or 2500)
+WORKERS = int(os.getenv("WORKERS") or 8)
+COMMIT_EVERY = int(os.getenv("COMMIT_EVERY") or 500)
+MAX_ROWS = int(os.getenv("MAX_ROWS") or 0) or None  # max agences pour CE run
+MAX_SECONDS = int(os.getenv("MAX_SECONDS") or 5 * 3600 + 30 * 60)  # arrêt propre avant les 6 h GitHub
 RETRY_ERRORS = os.getenv("RETRY_ERRORS", "").lower() in ("1", "true", "yes")
 DO_GIT = os.getenv("DO_GIT", "1") == "1"
 GL = os.getenv("SERPER_GL", "fr")

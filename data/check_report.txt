@@ -1,0 +1,50 @@
+Agences traitées : 26167
+Fiches Google récupérées : 85683 (moyenne 3.3 par agence)
+Agences SANS résultat : 2766 (10.6 %)
+
+Remplissage des champs (sur toutes les fiches) :
+  title        100.0 %  (0 vides)
+  address       94.4 %  (4782 vides)
+  latitude      97.2 %  (2433 vides)
+  longitude     97.2 %  (2433 vides)
+  rating        90.5 %  (8109 vides)
+  ratingCount   90.5 %  (8109 vides)
+  type           0.0 %  (85683 vides)
+  types          0.0 %  (85683 vides)
+  website       87.3 %  (10920 vides)
+  phoneNumber   90.2 %  (8432 vides)
+  description    0.0 %  (85683 vides)
+  cid          100.0 %  (0 vides)
+  placeId        0.0 %  (85683 vides)
+
+Types les plus fréquents :
+    43849  Agence immobilière
+     1943  Agent immobilier
+     1187  Restaurant   <-- hors immo
+     1050  Société de gestion immobilière
+      919  Consultant immobilier
+      690  Hôtel   <-- hors immo
+      688  Agence d'immobilier d'entreprise
+      611  Promoteur immobilier
+      476  Salon de coiffure   <-- hors immo
+      455  Siège social   <-- hors immo
+      437  Institut de beauté   <-- hors immo
+      402  Expert immobilier
+      394  Services aux entreprises   <-- hors immo
+      390  Location de vacances   <-- hors immo
+      375  Boulangerie   <-- hors immo
+      362  Française   <-- hors immo
+      340  Banque   <-- hors immo
+      305  Garage automobile   <-- hors immo
+      288  Association ou organisation   <-- hors immo
+      280  Expert-comptable   <-- hors immo
+      278  Entreprise de construction   <-- hors immo
+      277  Supermarché   <-- hors immo
+      265  Conseil en investissement   <-- hors immo
+      259  Restaurant français   <-- hors immo
+      257  Location d'appartement de vacances   <-- hors immo
+
+Fiches hors immobilier : 35537 / 85683 (41.5 %)
+Agences dont aucune fiche n'est immobilière : 6055
+
+Fichiers écrits : data/check_non_immo.csv, data/check_sans_immo.csv
